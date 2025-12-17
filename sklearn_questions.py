@@ -62,7 +62,6 @@ from sklearn.metrics.pairwise import pairwise_distances
 from sklearn.utils.multiclass import check_classification_targets
 
 
-
 class KNearestNeighbors(ClassifierMixin, BaseEstimator):
     """KNearestNeighbors classifier."""
 
