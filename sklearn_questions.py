@@ -59,6 +59,7 @@ from sklearn.model_selection import BaseCrossValidator
 from sklearn.utils.validation import check_is_fitted
 from sklearn.utils.validation import validate_data
 from sklearn.metrics.pairwise import pairwise_distances
+from sklearn.utils.multiclass import check_classification_targets
 
 
 class KNearestNeighbors(ClassifierMixin, BaseEstimator):
@@ -82,6 +83,11 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         self : instance of KNearestNeighbors
             The current instance of the classifier
         """
+        X, y = validate_data(self, X, y)
+        check_classification_targets(y)
+        self.X_train_ = X
+        self.y_train_ = y
+        self.classes_ = np.unique(y)
         return self
 
     def predict(self, X):
@@ -97,7 +103,15 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         y : ndarray, shape (n_test_samples,)
             Predicted class labels for each test data sample.
         """
-        y_pred = np.zeros(X.shape[0])
+        X = validate_data(self, X, reset=False)
+        check_is_fitted(self)
+        y_pred = np.zeros(X.shape[0], dtype=self.y_train_.dtype)
+        D = pairwise_distances(X, self.X_train_)
+        for i in range(X.shape[0]):
+            idx_neighbors = np.argsort(D[i, :])[:self.n_neighbors]
+            neighbors_labels = self.y_train_[idx_neighbors]
+            labels, counts = np.unique(neighbors_labels, return_counts=True)
+            y_pred[i] = labels[np.argmax(counts)]
         return y_pred
 
     def score(self, X, y):
@@ -115,7 +129,10 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         score : float
             Accuracy of the model computed for the (X, y) pairs.
         """
-        return 0.
+        y_pred = self.predict(X)
+        correct_predictions = np.sum(y_pred == y)
+        accuracy = correct_predictions / y.shape[0]
+        return accuracy
 
 
 class MonthlySplit(BaseCrossValidator):
@@ -155,7 +172,20 @@ class MonthlySplit(BaseCrossValidator):
         n_splits : int
             The number of splits.
         """
-        return 0
+        if self.time_col == "index":
+            if not isinstance(X.index, pd.DatetimeIndex):
+                raise ValueError(
+                    f"The column {self.time_col} is not of type datetime."
+                )
+            months = X.index.to_period("M")
+        else:
+            if not pd.api.types.is_datetime64_any_dtype(X[self.time_col]):
+                raise ValueError(
+                    f"The column {self.time_col} is not of type datetime."
+                )
+            months = X[self.time_col].dt.to_period("M")
+
+        return months.nunique() - 1
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test set.
@@ -178,11 +208,24 @@ class MonthlySplit(BaseCrossValidator):
             The testing set indices for that split.
         """
 
-        n_samples = X.shape[0]
-        n_splits = self.get_n_splits(X, y, groups)
-        for i in range(n_splits):
-            idx_train = range(n_samples)
-            idx_test = range(n_samples)
-            yield (
-                idx_train, idx_test
-            )
+        if self.time_col == "index":
+            if not isinstance(X.index, pd.DatetimeIndex):
+                raise ValueError(
+                    f"The column {self.time_col} is not of type datetime."
+                )
+            months = X.index.to_period("M")
+        else:
+            if not pd.api.types.is_datetime64_any_dtype(X[self.time_col]):
+                raise ValueError(
+                    f"The column {self.time_col} is not of type datetime."
+                )
+            months = X[self.time_col].dt.to_period("M")
+
+        unique_months = pd.Index(months.unique()).sort_values()
+
+        for i in range(len(unique_months) - 1):
+            train_month = unique_months[i]
+            test_month = unique_months[i + 1]
+            idx_train = np.flatnonzero(months == train_month)
+            idx_test = np.flatnonzero(months == test_month)
+            yield idx_train, idx_test
